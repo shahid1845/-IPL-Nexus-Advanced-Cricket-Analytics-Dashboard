@@ -1,0 +1,238 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
+  PieChart, Pie, Cell
+} from 'recharts';
+import { UploadCloud, Activity, Trophy, Target, Filter, Database } from 'lucide-react';
+
+/**
+ * IPL Nexus: Advanced Analytics Dashboard
+ * A high-performance React application for visualizing IPL match and delivery data.
+ */
+
+// --- Utility: Fast CSV Parser ---
+const parseCSV = (csvText) => {
+  const lines = csvText.split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim());
+  const data = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    let row = [];
+    let inQuotes = false;
+    let currentVal = '';
+    
+    for (let char of lines[i]) {
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        row.push(currentVal.trim());
+        currentVal = '';
+      } else {
+        currentVal += char;
+      }
+    }
+    row.push(currentVal.trim());
+    
+    const obj = {};
+    for (let j = 0; j < headers.length; j++) {
+      obj[headers[j]] = row[j];
+    }
+    data.push(obj);
+  }
+  return data;
+};
+
+// --- Sample Data (Auto-loads for public visibility) ---
+const demoMatches = [
+  { id: '1', season: '2024', team1: 'Chennai Super Kings', team2: 'Kolkata Knight Riders', winner: 'Chennai Super Kings', toss_decision: 'bat' },
+  { id: '2', season: '2024', team1: 'Mumbai Indians', team2: 'Royal Challengers Bengaluru', winner: 'Royal Challengers Bengaluru', toss_decision: 'field' },
+  { id: '3', season: '2023', team1: 'Gujarat Titans', team2: 'Rajasthan Royals', winner: 'Gujarat Titans', toss_decision: 'bat' },
+  { id: '4', season: '2023', team1: 'Sunrisers Hyderabad', team2: 'Lucknow Super Giants', winner: 'Lucknow Super Giants', toss_decision: 'field' },
+  { id: '5', season: '2024', team1: 'Chennai Super Kings', team2: 'Mumbai Indians', winner: 'Chennai Super Kings', toss_decision: 'bat' },
+];
+
+const demoDeliveries = [
+  { match_id: '1', batter: 'RD Gaikwad', bowler: 'SP Narine', batsman_runs: '4', total_runs: '4', is_wicket: '0' },
+  { match_id: '1', batter: 'S Dube', bowler: 'AD Russell', batsman_runs: '6', total_runs: '6', is_wicket: '0' },
+  { match_id: '2', batter: 'RG Sharma', bowler: 'Mohammed Siraj', batsman_runs: '6', total_runs: '6', is_wicket: '0' },
+  { match_id: '2', batter: 'V Kohli', bowler: 'JJ Bumrah', batsman_runs: '4', total_runs: '4', is_wicket: '0' },
+  { match_id: '2', batter: 'Ishan Kishan', bowler: 'Mohammed Siraj', batsman_runs: '0', total_runs: '0', is_wicket: '1', dismissal_kind: 'caught' },
+  { match_id: '3', batter: 'Shubman Gill', bowler: 'TA Boult', batsman_runs: '6', total_runs: '6', is_wicket: '0' },
+  { match_id: '3', batter: 'SV Samson', bowler: 'Rashid Khan', batsman_runs: '4', total_runs: '4', is_wicket: '0' },
+  { match_id: '4', batter: 'KL Rahul', bowler: 'B Kumar', batsman_runs: '6', total_runs: '6', is_wicket: '0' },
+  { match_id: '5', batter: 'MS Dhoni', bowler: 'JJ Bumrah', batsman_runs: '6', total_runs: '6', is_wicket: '0' },
+];
+
+export default function App() {
+  const [matches, setMatches] = useState(demoMatches);
+  const [deliveries, setDeliveries] = useState(demoDeliveries);
+  const [loadingMsg, setLoadingMsg] = useState('');
+  const [isDemo, setIsDemo] = useState(true);
+  const [showUpload, setShowUpload] = useState(false);
+  
+  const [selectedSeason, setSelectedSeason] = useState('All');
+  const [selectedTeam, setSelectedTeam] = useState('All');
+
+  const handleFileUpload = (e, type) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setLoadingMsg(`Processing ${file.name}...`);
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setTimeout(() => {
+        const text = event.target.result;
+        const parsedData = parseCSV(text);
+        if (type === 'matches') {
+          if (parsedData[0]?.season) { setMatches(parsedData); setIsDemo(false); }
+        } else {
+          if (parsedData[0]?.batter) { setDeliveries(parsedData); setIsDemo(false); }
+        }
+        setLoadingMsg('');
+      }, 100);
+    };
+    reader.readAsText(file);
+  };
+
+  const { seasons, teams } = useMemo(() => {
+    const s = new Set();
+    const t = new Set();
+    matches.forEach(m => {
+      if (m.season) s.add(m.season);
+      if (m.team1) t.add(m.team1);
+      if (m.team2) t.add(m.team2);
+    });
+    return { seasons: Array.from(s).sort(), teams: Array.from(t).sort() };
+  }, [matches]);
+
+  const filteredMatches = useMemo(() => {
+    return matches.filter(m => {
+      const matchSeason = selectedSeason === 'All' || m.season === selectedSeason;
+      const matchTeam = selectedTeam === 'All' || m.team1 === selectedTeam || m.team2 === selectedTeam;
+      return matchSeason && matchTeam;
+    });
+  }, [matches, selectedSeason, selectedTeam]);
+
+  const filteredDeliveries = useMemo(() => {
+    if (selectedSeason === 'All' && selectedTeam === 'All') return deliveries; 
+    const matchIds = new Set(filteredMatches.map(m => m.id));
+    return deliveries.filter(d => matchIds.has(d.match_id));
+  }, [deliveries, filteredMatches, selectedSeason, selectedTeam]);
+
+  const stats = useMemo(() => {
+    if (!filteredMatches.length || !filteredDeliveries.length) return null;
+    let totalRuns = 0, totalWickets = 0, totalSixes = 0;
+    const batsmanMap = {}, bowlerMap = {}, teamWinsMap = {};
+    let tossBat = 0, tossField = 0;
+
+    filteredMatches.forEach(m => {
+      if (m.winner && m.winner !== 'NA') teamWinsMap[m.winner] = (teamWinsMap[m.winner] || 0) + 1;
+      if (m.toss_decision === 'bat') tossBat++;
+      if (m.toss_decision === 'field') tossField++;
+    });
+
+    filteredDeliveries.forEach(d => {
+      const runs = parseInt(d.batsman_runs) || 0;
+      const totalR = parseInt(d.total_runs) || 0;
+      const isWicket = parseInt(d.is_wicket) || 0;
+      totalRuns += totalR;
+      if (runs === 6) totalSixes++;
+      if (isWicket) totalWickets++;
+      if (d.batter) batsmanMap[d.batter] = (batsmanMap[d.batter] || 0) + runs;
+      if (isWicket && d.dismissal_kind !== 'run out' && d.bowler) bowlerMap[d.bowler] = (bowlerMap[d.bowler] || 0) + 1;
+    });
+
+    return {
+      totalMatches: filteredMatches.length,
+      totalRuns, totalWickets, totalSixes,
+      topBatsmen: Object.entries(batsmanMap).map(([name, runs]) => ({ name, runs })).sort((a, b) => b.runs - a.runs).slice(0, 5),
+      topBowlers: Object.entries(bowlerMap).map(([name, wickets]) => ({ name, wickets })).sort((a, b) => b.wickets - a.wickets).slice(0, 5),
+      teamWins: Object.entries(teamWinsMap).map(([name, wins]) => ({ name, wins })).sort((a, b) => b.wins - a.wins).slice(0, 5),
+      tossData: [{ name: 'Bat First', value: tossBat }, { name: 'Field First', value: tossField }]
+    };
+  }, [filteredMatches, filteredDeliveries]);
+
+  if (loadingMsg) return <div className="flex items-center justify-center min-h-screen bg-[#0B1120] text-cyan-400"><div className="text-center p-8 bg-slate-800/80 rounded-2xl shadow-2xl"><Activity className="w-16 h-16 animate-bounce mx-auto mb-4" /><h2 className="text-2xl font-bold text-white">Crunching Data...</h2></div></div>;
+
+  return (
+    <div className="min-h-screen bg-[#0B1120] text-slate-300 selection:bg-cyan-500/30">
+      <nav className="bg-[#111827]/80 backdrop-blur-lg border-b border-slate-800 sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 h-20 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg"><Trophy className="w-6 h-6 text-white" /></div>
+            <div><span className="font-bold text-2xl text-white block">IPL Nexus</span><span className="text-[10px] text-cyan-400 font-medium tracking-widest uppercase">Analytics Dashboard</span></div>
+          </div>
+          <button onClick={() => setShowUpload(true)} className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white px-4 py-2 rounded-xl transition-all"><Database className="w-4 h-4 text-cyan-400" /><span>Data Source</span></button>
+        </div>
+      </nav>
+
+      {showUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full relative">
+            <button onClick={() => setShowUpload(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white">✕</button>
+            <h2 className="text-xl font-bold text-white mb-4">Ingest Custom CSV</h2>
+            <div className="space-y-4">
+              <label className="flex flex-col items-center justify-center h-24 border-2 border-slate-700 border-dashed rounded-xl cursor-pointer bg-slate-800 hover:bg-slate-700/50">
+                <UploadCloud className="w-6 h-6 mb-1 text-cyan-500" /><p className="text-xs">Upload matches.csv</p>
+                <input type="file" accept=".csv" className="hidden" onChange={(e) => { handleFileUpload(e, 'matches'); setShowUpload(false); }} />
+              </label>
+              <label className="flex flex-col items-center justify-center h-24 border-2 border-slate-700 border-dashed rounded-xl cursor-pointer bg-slate-800 hover:bg-slate-700/50">
+                <UploadCloud className="w-6 h-6 mb-1 text-fuchsia-500" /><p className="text-xs">Upload deliveries.csv</p>
+                <input type="file" accept=".csv" className="hidden" onChange={(e) => { handleFileUpload(e, 'deliveries'); setShowUpload(false); }} />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-7xl mx-auto px-4 pt-8 pb-12">
+        {isDemo && (
+          <div className="bg-cyan-900/20 border border-cyan-500/30 text-cyan-100 px-5 py-4 rounded-2xl mb-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="text-sm"><strong>Demo Mode:</strong> Browsing pre-loaded sample data.</p>
+            <button onClick={() => setShowUpload(true)} className="text-xs bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-4 py-2 rounded-lg font-bold">Load Real Dataset</button>
+          </div>
+        )}
+
+        <div className="bg-slate-800/40 border border-slate-700 rounded-2xl p-4 mb-8 flex flex-col sm:flex-row gap-4">
+          <select className="flex-1 bg-slate-900 border border-slate-700 text-white rounded-xl py-2 px-4" value={selectedSeason} onChange={(e) => setSelectedSeason(e.target.value)}>
+            <option value="All">All Seasons</option>{seasons.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select className="flex-1 bg-slate-900 border border-slate-700 text-white rounded-xl py-2 px-4" value={selectedTeam} onChange={(e) => setSelectedTeam(e.target.value)}>
+            <option value="All">All Teams</option>{teams.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+
+        {stats && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+              <KpiCard icon={<Database />} title="Matches" value={stats.totalMatches} color="from-blue-500 to-cyan-500" />
+              <KpiCard icon={<Activity />} title="Runs" value={stats.totalRuns} color="from-emerald-500 to-teal-500" />
+              <KpiCard icon={<Target />} title="Wickets" value={stats.totalWickets} color="from-fuchsia-500 to-pink-500" />
+              <KpiCard icon={<Trophy />} title="Sixes" value={stats.totalSixes} color="from-amber-500 to-orange-500" />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <ChartBox title="Match Wins by Team"><ResponsiveContainer width="100%" height={250}><BarChart data={stats.teamWins} layout="vertical"><CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" /><XAxis type="number" stroke="#94a3b8" fontSize={10} /><YAxis dataKey="name" type="category" width={100} stroke="#cbd5e1" fontSize={10} tickFormatter={t => t.length > 12 ? t.substring(0, 10) + '..' : t} /><RechartsTooltip contentStyle={{backgroundColor: '#0f172a', border: 'none', borderRadius: '8px'}} /><Bar dataKey="wins" fill="#0ea5e9" radius={[0, 4, 4, 0]} /></BarChart></ResponsiveContainer></ChartBox>
+              <ChartBox title="Toss Decision Ratio"><ResponsiveContainer width="100%" height={250}><PieChart><Pie data={stats.tossData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" stroke="none">{stats.tossData.map((e, i) => <Cell key={i} fill={i === 0 ? '#10b981' : '#f59e0b'} />)}</Pie><RechartsTooltip /><Legend /></PieChart></ResponsiveContainer></ChartBox>
+              <ChartBox title="Top Batsmen (Runs)"><ResponsiveContainer width="100%" height={250}><BarChart data={stats.topBatsmen}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" /><XAxis dataKey="name" stroke="#94a3b8" fontSize={10} angle={-25} textAnchor="end" height={50} /><YAxis stroke="#94a3b8" fontSize={10} /><RechartsTooltip /><Bar dataKey="runs" fill="#8b5cf6" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></ChartBox>
+              <ChartBox title="Top Bowlers (Wickets)"><ResponsiveContainer width="100%" height={250}><BarChart data={stats.topBowlers}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" /><XAxis dataKey="name" stroke="#94a3b8" fontSize={10} angle={-25} textAnchor="end" height={50} /><YAxis stroke="#94a3b8" fontSize={10} /><RechartsTooltip /><Bar dataKey="wickets" fill="#f43f5e" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></ChartBox>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const KpiCard = ({ icon, title, value, color }) => (
+  <div className="bg-slate-800/60 p-5 rounded-2xl border border-slate-700 flex items-center gap-4">
+    <div className={`p-3 rounded-xl bg-gradient-to-br ${color} text-white`}>{React.cloneElement(icon, { size: 20 })}</div>
+    <div><p className="text-xs text-slate-500 uppercase font-bold">{title}</p><p className="text-2xl font-black text-white">{value.toLocaleString()}</p></div>
+  </div>
+);
+
+const ChartBox = ({ title, children }) => (
+  <div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700"><h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest">{title}</h3>{children}</div>
+);
